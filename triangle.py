@@ -27,7 +27,8 @@ from matplotlib.patches import Ellipse
 import matplotlib.cm as cm
 
 
-def corner(xs, weights=None, labels=None, show_titles=False, title_fmt=".2f",
+def corner(xs=None, cov=None, mu=None, corr=None,
+           weights=None, labels=None, show_titles=False, title_fmt=".2f",
            title_args={}, extents=None, zoom=None, truths=None,
            truth_color="#4682b4", scale_hist=False, quantiles=[], verbose=True,
            plot_contours=True, plot_datapoints=True, fig=None, **kwargs):
@@ -43,6 +44,15 @@ def corner(xs, weights=None, labels=None, show_titles=False, title_fmt=".2f",
         array this results in a simple histogram. For a 2-D array, the zeroth
         axis is the list of samples and the next axis are the dimensions of
         the space.
+
+    corr :  array_like (ndim, ndim)
+        The correlation matrix whose ellipses you want to plot.
+
+    cov :  array_like (ndim, ndim)
+        The covariance matrix for the mu/covar ellipses you want to plot.
+
+    mu :  array_like (ndim,)
+        The means for the mu/covar ellipses you want to plot.
 
     weights : array_like (nsamples,)
         The weight of each sample. If `None` (default), samples are given
@@ -102,15 +112,32 @@ def corner(xs, weights=None, labels=None, show_titles=False, title_fmt=".2f",
 
     """
 
-    # Deal with 1D sample lists.
-    xs = np.atleast_1d(xs)
-    if len(xs.shape) == 1:
-        xs = np.atleast_2d(xs)
+    # For simple correlation and covariance ellipse plots, the xs argument is optional.
+    if xs is None:
+        # require either covar or correl here.
+        if corr is None:
+            assert cov is not None, "Need either samples, cov, or corr."
+            assert mu is not None, "Cov requires mu"
+            # Do cov+mu case
+            stds = np.diag(cov)
+            extents = [(m-3.0*std, m+3.0*std) for m, std in zip(mu, stds)]
+        else:
+            cov = corr
+            K = len(cov)
+            extents = [(-1,1)]*K
+            mu = [0]*K
+        # set K and extents
+        K = len(cov)
     else:
-        assert len(xs.shape) == 2, "The input sample array must be 1- or 2-D."
-        xs = xs.T
-    assert xs.shape[0] <= xs.shape[1], "I don't believe that you want more " \
-                                       "dimensions than samples!"
+        # Deal with 1D sample lists.
+        xs = np.atleast_1d(xs)
+        if len(xs.shape) == 1:
+            xs = np.atleast_2d(xs)
+        else:
+            assert len(xs.shape) == 2, "The input sample array must be 1- or 2-D."
+            xs = xs.T
+        assert xs.shape[0] <= xs.shape[1], "I don't believe that you want more " \
+                                           "dimensions than samples!"
 
     if weights is not None:
         weights = np.asarray(weights)
@@ -122,7 +149,8 @@ def corner(xs, weights=None, labels=None, show_titles=False, title_fmt=".2f",
     # backwards-compatibility
     plot_contours = kwargs.get("smooth", plot_contours)
 
-    K = len(xs)
+    if xs is not None:
+        K = len(xs)
     factor = 2.0           # size of one side of one panel
     lbdim = 0.5 * factor   # size of left/bottom margin
     trdim = 0.2 * factor   # size of top/right margin
@@ -171,46 +199,56 @@ def corner(xs, weights=None, labels=None, show_titles=False, title_fmt=".2f",
             extents[i] = (center - zoom * 0.5 * range_,
                           center + zoom * 0.5 * range_)
 
-    for i, x in enumerate(xs):
-        if np.shape(xs)[0] == 1:
-            ax = axes
-        else:
+    #for i, x in enumerate(xs):
+    for i in range(K):
+        if xs is None:
             ax = axes[i, i]
-        # Plot the histograms.
-        n, b, p = ax.hist(x, weights=weights, bins=kwargs.get("bins", 50),
-                          range=extents[i], histtype="step",
-                          color=kwargs.get("color", "k"))
-        if truths is not None:
-            ax.axvline(truths[i], color=truth_color)
+            xcurve = np.linspace(extents[i][0], extents[i][1], 100)
+            var = cov[i,i]
+            ycurve = np.exp(-0.5 * (xcurve-mu[i])**2/var)
+            ax.plot(xcurve, ycurve, c=kwargs.get("color", "k"))
+            ax.set_xlim(extents[i])
+            n = 1.0
+        else:
+            if np.shape(xs)[0] == 1:
+                ax = axes
+            else:
+                ax = axes[i, i]
+            # Plot the histograms.
+            n, b, p = ax.hist(x, weights=weights, bins=kwargs.get("bins", 50),
+                              range=extents[i], histtype="step",
+                              color=kwargs.get("color", "k"))
+            if truths is not None:
+                ax.axvline(truths[i], color=truth_color)
 
-        # Plot quantiles if wanted.
-        if len(quantiles) > 0:
-            qvalues = quantile(x, quantiles, weights=weights)
-            for q in qvalues:
-                ax.axvline(q, ls="dashed", color=kwargs.get("color", "k"))
+            # Plot quantiles if wanted.
+            if len(quantiles) > 0:
+                qvalues = quantile(x, quantiles, weights=weights)
+                for q in qvalues:
+                    ax.axvline(q, ls="dashed", color=kwargs.get("color", "k"))
 
-            if verbose:
-                print("Quantiles:")
-                print(zip(quantiles, qvalues))
+                if verbose:
+                    print("Quantiles:")
+                    print(zip(quantiles, qvalues))
 
-            if show_titles:
-                # Compute the quantiles for the title. This might redo
-                # unneeded computation but who cares.
-                q_16, q_50, q_84 = quantile(x, [0.16, 0.5, 0.84],
-                                            weights=weights)
-                q_m, q_p = q_50-q_16, q_84-q_50
+                if show_titles:
+                    # Compute the quantiles for the title. This might redo
+                    # unneeded computation but who cares.
+                    q_16, q_50, q_84 = quantile(x, [0.16, 0.5, 0.84],
+                                                weights=weights)
+                    q_m, q_p = q_50-q_16, q_84-q_50
 
-                # Format the quantile display.
-                fmt = "{{0:{0}}}".format(title_fmt).format
-                title = r"${{{0}}}_{{-{1}}}^{{+{2}}}$"
-                title = title.format(fmt(q_50), fmt(q_m), fmt(q_p))
+                    # Format the quantile display.
+                    fmt = "{{0:{0}}}".format(title_fmt).format
+                    title = r"${{{0}}}_{{-{1}}}^{{+{2}}}$"
+                    title = title.format(fmt(q_50), fmt(q_m), fmt(q_p))
 
-                # Add in the column name if it's given.
-                if labels is not None:
-                    title = "{0} = {1}".format(labels[i], title)
+                    # Add in the column name if it's given.
+                    if labels is not None:
+                        title = "{0} = {1}".format(labels[i], title)
 
-                # Add the title to the axis.
-                ax.set_title(title, **title_args)
+                    # Add the title to the axis.
+                    ax.set_title(title, **title_args)
 
         # Set up the axes.
         ax.set_xlim(extents[i])
@@ -231,11 +269,15 @@ def corner(xs, weights=None, labels=None, show_titles=False, title_fmt=".2f",
                 ax.set_xlabel(labels[i])
                 ax.xaxis.set_label_coords(0.5, -0.3)
 
-        for j, y in enumerate(xs):
-            if np.shape(xs)[0] == 1:
-                ax = axes
-            else:
+        # for j, y in enumerate(xs):
+        for j in range(K):
+            if xs is None:
                 ax = axes[i, j]
+            else:
+                if np.shape(xs)[0] == 1:
+                    ax = axes
+                else:
+                    ax = axes[i, j]
             if j > i:
                 ax.set_visible(False)
                 ax.set_frame_on(False)
@@ -243,10 +285,19 @@ def corner(xs, weights=None, labels=None, show_titles=False, title_fmt=".2f",
             elif j == i:
                 continue
 
-            hist2d(y, x, ax=ax, extent=[extents[j], extents[i]],
-                   plot_contours=plot_contours,
-                   plot_datapoints=plot_datapoints,
-                   weights=weights, **kwargs)
+            if xs is None:
+                cov0 = np.zeros((2,2), dtype=np.float)
+                cov0[0,0] = cov[i,i]
+                cov0[1,1] = cov[j,j]
+                cov0[0,1] = cov0[1,0] = cov[i,j]
+                error_ellipse((mu[i], mu[j]), cov0, ax=ax, edgecolor="r", ls="dashed")
+                ax.set_xlim(extents[i])
+                ax.set_ylim(extents[j])
+            else:
+                hist2d(y, x, ax=ax, extent=[extents[j], extents[i]],
+                       plot_contours=plot_contours,
+                       plot_datapoints=plot_datapoints,
+                       weights=weights, **kwargs)
 
             if truths is not None:
                 ax.plot(truths[j], truths[i], "s", color=truth_color)
@@ -378,10 +429,10 @@ def hist2d(x, y, *args, **kwargs):
         ax.pcolor(X, Y, H.max() - H.T, cmap=cmap)
         ax.contour(X1, Y1, H.T, V, colors=color, linewidths=linewidths)
 
-    data = np.vstack([x, y])
-    mu = np.mean(data, axis=1)
-    cov = np.cov(data)
     if kwargs.pop("plot_ellipse", False):
+        data = np.vstack([x, y])
+        mu = np.mean(data, axis=1)
+        cov = np.cov(data)
         error_ellipse(mu, cov, ax=ax, edgecolor="r", ls="dashed")
 
     ax.set_xlim(extent[0])
